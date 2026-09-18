@@ -1,44 +1,308 @@
--- LocalScript / Executor Script - Aimbot Ghim Đầu 100% (Khắc phục triệt để lỗi bỏ sót mục tiêu)
+-- LocalScript đặt tại: StarterPlayer -> StarterPlayerScripts -> RioHubCombinedScript
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 
--- ==========================================
--- CẤU HÌNH HỆ THỐNG
--- ==========================================
+-- Trạng thái tính năng (Di chuyển & Tối ưu & Antiban)
+local flyEnabled = false
+local speedEnabled = false
+local fixLagEnabled = false
+local antiBanEnabled = false
+
+local flySpeed = 60
+local customSpeed = 80
+
+local bodyVelocity, bodyGyro, flyConnection
+
+-- Trạng thái tính năng (Aimbot & ESP)
 local Settings = {
     Aimbot = false,
     ESP_Tracers = false,
     ShowFOV = false,
-    FOV_Size = 200,      -- Tăng kích thước FOV rộng hơn để bắt trọn tất cả người chơi xung quanh
-    AimPart = "Head"     -- Ghim thẳng vào Đầu
+    FOV_Size = 120,      
+    AimPart = "Head"     
 }
 
--- Hàm lấy Parent an toàn
+-- === HỆ THỐNG AN TOÀN / ANTIBAN CƠ BẢN ===
+local _env = (getgenv and getgenv()) or _G
+
+local function secureCall(func, ...)
+    local success, result = pcall(func, ...)
+    if not success then return nil end
+    return result
+end
+
+-- === 1. GIAO DIỆN RIO HUB CHUNG (Đảm bảo luôn hiển thị & bảo vệ GUI) ===
 local function getParent()
     local success, parent = pcall(function()
         if gethui then return gethui() end
         return game:GetService("CoreGui")
     end)
     if success and parent then return parent end
-    return LocalPlayer:WaitForChild("PlayerGui")
+    return player:WaitForChild("PlayerGui")
 end
 
-local TargetParent = getParent()
+local playerGui = getParent()
+if playerGui:FindFirstChild("RioHubGui") then
+    playerGui.RioHubGui:Destroy()
+end
 
--- Tạo ScreenGui chính
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "Aimbot_ESP_Menu"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.DisplayOrder = 9999
-ScreenGui.Parent = TargetParent
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "RioHubGui"
+screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 999
+screenGui.IgnoreGuiInset = true
 
--- ==========================================
--- 1. VÒNG TRÒN FOV & TRACERS FOLDER
--- ==========================================
+secureCall(function()
+    if syn and syn.protect_gui then
+        syn.protect_gui(screenGui)
+        screenGui.Parent = game:GetService("CoreGui")
+    elseif gethui then
+        screenGui.Parent = gethui()
+    else
+        screenGui.Parent = game:GetService("CoreGui")
+    end
+end)
+
+if not screenGui.Parent then
+    screenGui.Parent = player:WaitForChild("PlayerGui")
+end
+
+local overlayBlocker = Instance.new("TextButton")
+overlayBlocker.Name = "OverlayBlocker"
+overlayBlocker.Size = UDim2.new(1, 0, 1, 0)
+overlayBlocker.Position = UDim2.new(0, 0, 0, 0)
+overlayBlocker.BackgroundTransparency = 1
+overlayBlocker.Text = ""
+overlayBlocker.Active = true
+overlayBlocker.Modal = true
+overlayBlocker.AutoButtonColor = false
+overlayBlocker.Visible = false
+overlayBlocker.ZIndex = 1
+overlayBlocker.Parent = screenGui
+
+local logoBtn = Instance.new("TextButton")
+logoBtn.Name = "RioLogoButton"
+logoBtn.Size = UDim2.new(0, 50, 0, 50)
+logoBtn.Position = UDim2.new(0.02, 0, 0.2, 0)
+logoBtn.BackgroundColor3 = Color3.fromRGB(90, 50, 210)
+logoBtn.Text = "Rio"
+logoBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+logoBtn.TextSize = 16
+logoBtn.Font = Enum.Font.SourceSansBold
+logoBtn.Active = true
+logoBtn.Draggable = true
+logoBtn.ZIndex = 10
+logoBtn.Parent = screenGui
+Instance.new("UICorner", logoBtn).CornerRadius = UDim.new(1, 0)
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 460, 0, 280)
+mainFrame.Position = UDim2.new(0.25, 0, 0.25, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+mainFrame.BorderSizePixel = 0
+mainFrame.Visible = false
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.ZIndex = 2
+mainFrame.Parent = screenGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
+
+local function setMenuVisible(visible)
+    mainFrame.Visible = visible
+    overlayBlocker.Visible = visible
+end
+
+local headerLabel = Instance.new("TextLabel")
+headerLabel.Size = UDim2.new(1, -40, 0, 40)
+headerLabel.Position = UDim2.new(0, 15, 0, 0)
+headerLabel.BackgroundTransparency = 1
+headerLabel.Text = "RIO HUB  |  @Rio_Hammer"
+headerLabel.TextColor3 = Color3.fromRGB(240, 240, 250)
+headerLabel.TextSize = 14
+headerLabel.Font = Enum.Font.SourceSansBold
+headerLabel.TextXAlignment = Enum.TextXAlignment.Left
+headerLabel.ZIndex = 3
+headerLabel.Parent = mainFrame
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 0, 30)
+closeBtn.Position = UDim2.new(1, -35, 0, 5)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text = "✕"
+closeBtn.TextColor3 = Color3.fromRGB(180, 180, 190)
+closeBtn.TextSize = 16
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.Active = true
+closeBtn.ZIndex = 3
+closeBtn.Parent = mainFrame
+
+closeBtn.MouseButton1Click:Connect(function() 
+    setMenuVisible(false) 
+end)
+
+logoBtn.MouseButton1Click:Connect(function() 
+    setMenuVisible(not mainFrame.Visible) 
+end)
+
+local sidebar = Instance.new("Frame")
+sidebar.Size = UDim2.new(0, 120, 1, -50)
+sidebar.Position = UDim2.new(0, 10, 0, 45)
+sidebar.BackgroundColor3 = Color3.fromRGB(28, 30, 38)
+sidebar.BorderSizePixel = 0
+sidebar.Active = true
+sidebar.ZIndex = 3
+sidebar.Parent = mainFrame
+Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 8)
+
+local contentFrame = Instance.new("Frame")
+contentFrame.Size = UDim2.new(1, -150, 1, -55)
+contentFrame.Position = UDim2.new(0, 140, 0, 45)
+contentFrame.BackgroundTransparency = 1
+contentFrame.Active = true
+contentFrame.ZIndex = 3
+contentFrame.Parent = mainFrame
+
+local tabs = {}
+local function createTab(name, index)
+    local tabBtn = Instance.new("TextButton")
+    tabBtn.Size = UDim2.new(0.9, 0, 0, 32)
+    tabBtn.Position = UDim2.new(0.05, 0, 0, (index - 1) * 38 + 8)
+    tabBtn.BackgroundColor3 = Color3.fromRGB(36, 39, 50)
+    tabBtn.Text = name
+    tabBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
+    tabBtn.TextSize = 12
+    tabBtn.Font = Enum.Font.SourceSansBold
+    tabBtn.Active = true
+    tabBtn.ZIndex = 4
+    tabBtn.Parent = sidebar
+    Instance.new("UICorner", tabBtn).CornerRadius = UDim.new(0, 6)
+
+    local page = Instance.new("Frame")
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.Visible = false
+    page.Active = true
+    page.ZIndex = 4
+    page.Parent = contentFrame
+
+    tabBtn.MouseButton1Click:Connect(function()
+        for _, t in pairs(tabs) do
+            t.Page.Visible = false
+            t.Button.BackgroundColor3 = Color3.fromRGB(36, 39, 50)
+        end
+        page.Visible = true
+        tabBtn.BackgroundColor3 = Color3.fromRGB(90, 50, 210)
+    end)
+    tabs[name] = {Button = tabBtn, Page = page}
+    return page
+end
+
+local movePage = createTab("Di chuyển", 1)
+local optPage = createTab("Tối ưu", 2)
+local aimPage = createTab("Aimbot", 3)
+local antibanPage = createTab("Antiban", 4)
+
+tabs["Di chuyển"].Page.Visible = true
+tabs["Di chuyển"].Button.BackgroundColor3 = Color3.fromRGB(90, 50, 210)
+
+-- Buttons trang Di chuyển
+local flyBtn = Instance.new("TextButton", movePage)
+flyBtn.Size, flyBtn.Position = UDim2.new(0.95, 0, 0, 36), UDim2.new(0, 0, 0, 10)
+flyBtn.BackgroundColor3, flyBtn.TextColor3 = Color3.fromRGB(45, 48, 60), Color3.fromRGB(220, 220, 230)
+flyBtn.Text, flyBtn.TextSize, flyBtn.Font = "Fly Mode: OFF", 13, Enum.Font.SourceSansBold
+flyBtn.Active = true
+flyBtn.ZIndex = 5
+Instance.new("UICorner", flyBtn).CornerRadius = UDim.new(0, 6)
+
+local speedInput = Instance.new("TextBox", movePage)
+speedInput.Size, speedInput.Position = UDim2.new(0.95, 0, 0, 34), UDim2.new(0, 0, 0, 55)
+speedInput.BackgroundColor3, speedInput.TextColor3 = Color3.fromRGB(35, 38, 48), Color3.fromRGB(255, 255, 255)
+speedInput.Text, speedInput.PlaceholderText = "100", "Nhập tốc độ..."
+speedInput.TextSize, speedInput.Font = 12, Enum.Font.SourceSansBold
+speedInput.Active = true
+speedInput.ZIndex = 5
+Instance.new("UICorner", speedInput).CornerRadius = UDim.new(0, 6)
+
+local speedBtn = Instance.new("TextButton", movePage)
+speedBtn.Size, speedBtn.Position = UDim2.new(0.95, 0, 0, 36), UDim2.new(0, 0, 0, 98)
+speedBtn.BackgroundColor3, speedBtn.TextColor3 = Color3.fromRGB(45, 48, 60), Color3.fromRGB(220, 220, 230)
+speedBtn.Text, speedBtn.TextSize, speedBtn.Font = "Tốc Độ: OFF", 13, Enum.Font.SourceSansBold
+speedBtn.Active = true
+speedBtn.ZIndex = 5
+Instance.new("UICorner", speedBtn).CornerRadius = UDim.new(0, 6)
+
+-- Buttons trang Tối ưu (Fix Lag)
+local fixLagBtn = Instance.new("TextButton", optPage)
+fixLagBtn.Size, fixLagBtn.Position = UDim2.new(0.95, 0, 0, 40), UDim2.new(0, 0, 0, 10)
+fixLagBtn.BackgroundColor3, fixLagBtn.TextColor3 = Color3.fromRGB(45, 48, 60), Color3.fromRGB(220, 220, 230)
+fixLagBtn.Text, fixLagBtn.TextSize, fixLagBtn.Font = "Fix Lag Ép Xung FPS: OFF", 13, Enum.Font.SourceSansBold
+fixLagBtn.Active = true
+fixLagBtn.ZIndex = 5
+Instance.new("UICorner", fixLagBtn).CornerRadius = UDim.new(0, 6)
+
+-- Buttons trang Antiban
+local antiBanBtn = Instance.new("TextButton", antibanPage)
+antiBanBtn.Size, antiBanBtn.Position = UDim2.new(0.95, 0, 0, 40), UDim2.new(0, 0, 0, 10)
+antiBanBtn.BackgroundColor3, antiBanBtn.TextColor3 = Color3.fromRGB(45, 48, 60), Color3.fromRGB(220, 220, 230)
+antiBanBtn.Text, antiBanBtn.TextSize, antiBanBtn.Font = "Antiban: OFF", 13, Enum.Font.SourceSansBold
+antiBanBtn.Active = true
+antiBanBtn.ZIndex = 5
+Instance.new("UICorner", antiBanBtn).CornerRadius = UDim.new(0, 6)
+
+antiBanBtn.MouseButton1Click:Connect(function()
+    antiBanEnabled = not antiBanEnabled
+    if antiBanEnabled then
+        antiBanBtn.Text = "Antiban: ON"
+        antiBanBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+        antiBanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        
+        secureCall(function()
+            if setreadonly and makewrite then
+                setreadonly(table, false)
+            end
+        end)
+    else
+        antiBanBtn.Text = "Antiban: OFF"
+        antiBanBtn.BackgroundColor3 = Color3.fromRGB(45, 48, 60)
+        antiBanBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+    end
+end)
+
+-- === 2. TẠO CÁC NÚT BẬT/TẮT TRONG TAB AIMBOT ===
+local function createAimToggle(text, yPos, settingKey, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.95, 0, 0, 36)
+    btn.Position = UDim2.new(0, 0, 0, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(45, 48, 60)
+    btn.TextColor3 = Color3.fromRGB(220, 220, 230)
+    btn.Font = Enum.Font.SourceSansBold
+    btn.TextSize = 13
+    btn.Text = text .. ": OFF"
+    btn.Active = true
+    btn.ZIndex = 5
+    btn.Parent = aimPage
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    btn.MouseButton1Click:Connect(function()
+        Settings[settingKey] = not Settings[settingKey]
+        local isEnabled = Settings[settingKey]
+        
+        btn.Text = text .. ": " .. (isEnabled and "ON" or "OFF")
+        btn.BackgroundColor3 = isEnabled and Color3.fromRGB(40, 180, 80) or Color3.fromRGB(45, 48, 60)
+        btn.TextColor3 = isEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(220, 220, 230)
+        
+        if callback then callback(isEnabled) end
+    end)
+end
+
+-- === 3. VÒNG TRÒN FOV & TRACERS CHO AIMBOT ===
 local FOVCircle = Instance.new("Frame")
 FOVCircle.Name = "FOVCircle"
 FOVCircle.Size = UDim2.new(0, Settings.FOV_Size * 2, 0, Settings.FOV_Size * 2)
@@ -46,7 +310,7 @@ FOVCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
 FOVCircle.AnchorPoint = Vector2.new(0.5, 0.5)
 FOVCircle.BackgroundTransparency = 1
 FOVCircle.Visible = Settings.ShowFOV
-FOVCircle.Parent = ScreenGui
+FOVCircle.Parent = screenGui
 
 local FOVStroke = Instance.new("UIStroke")
 FOVStroke.Color = Color3.fromRGB(255, 255, 255)
@@ -59,100 +323,119 @@ FOVCorner.Parent = FOVCircle
 
 local TracersFolder = Instance.new("Folder")
 TracersFolder.Name = "TracersFolder"
-TracersFolder.Parent = ScreenGui
+TracersFolder.Parent = screenGui
 
--- ==========================================
--- 2. GIAO DIỆN MENU BẬT / TẮT
--- ==========================================
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 220, 0, 200)
-MainFrame.Position = UDim2.new(0.1, 0, 0.3, 0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.Visible = true
-MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
+createAimToggle("Aimbot (Ghim Đầu 100%)", 10, "Aimbot")
+createAimToggle("ESP Định Vị (Tracer)", 55, "ESP_Tracers")
+createAimToggle("Hiển Thị FOV", 100, "ShowFOV", function(val) FOVCircle.Visible = val end)
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 35)
-Title.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-Title.Text = "   MENU AIMBOT & ESP"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 13
-Title.Font = Enum.Font.SourceSansBold
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Parent = MainFrame
-Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 8)
+-- === 4. LOGIC TỐC ĐỘ CFRAME ===
+speedInput.FocusLost:Connect(function()
+    local val = tonumber(speedInput.Text)
+    if val and val > 0 then customSpeed = val end
+end)
 
-local function createToggle(text, yPos, settingKey, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.9, 0, 0, 35)
-    btn.Position = UDim2.new(0.05, 0, 0, yPos)
-    btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
-    btn.Font = Enum.Font.SourceSansBold
-    btn.TextSize = 13
-    btn.Text = text .. ": OFF"
-    btn.Parent = MainFrame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+speedBtn.MouseButton1Click:Connect(function()
+    speedEnabled = not speedEnabled
+    if speedEnabled then
+        speedBtn.Text = "Tốc Độ CFrame: ON"
+        speedBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+    else
+        speedBtn.Text = "Tốc Độ: OFF"
+        speedBtn.BackgroundColor3 = Color3.fromRGB(45, 48, 60)
+    end
+end)
 
-    btn.MouseButton1Click:Connect(function()
-        Settings[settingKey] = not Settings[settingKey]
-        local isEnabled = Settings[settingKey]
-        
-        btn.Text = text .. ": " .. (isEnabled and "ON" or "OFF")
-        btn.BackgroundColor3 = isEnabled and Color3.fromRGB(40, 180, 80) or Color3.fromRGB(45, 45, 45)
-        btn.TextColor3 = isEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 200)
-        
-        if callback then callback(isEnabled) end
+-- === 5. LOGIC FLY MODE ===
+local function stopFlying()
+    if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+    if bodyVelocity then bodyVelocity:Destroy() bodyVelocity = nil end
+    if bodyGyro then bodyGyro:Destroy() bodyGyro = nil end
+    local char = player.Character
+    if char and char:FindFirstChildOfClass("Humanoid") then
+        char:FindFirstChildOfClass("Humanoid").PlatformStand = false
+    end
+end
+
+local function startFlying()
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    local root = char.HumanoidRootPart
+    char:FindFirstChildOfClass("Humanoid").PlatformStand = true
+
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+    bodyVelocity.Velocity = Vector3.zero
+    bodyVelocity.Parent = root
+
+    bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+    bodyGyro.CFrame = root.CFrame
+    bodyGyro.Parent = root
+
+    flyConnection = RunService.RenderStepped:Connect(function()
+        if not flyEnabled or not char or not root then stopFlying() return end
+        local dir = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - camera.CFrame.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0, 1, 0) end
+
+        bodyVelocity.Velocity = dir.Magnitude > 0 and dir.Unit * flySpeed or Vector3.zero
+        bodyGyro.CFrame = camera.CFrame
     end)
 end
 
-createToggle("Aimbot (Ghim Đầu 100%)", 50, "Aimbot")
-createToggle("ESP Định Vị (Tracer)", 95, "ESP_Tracers")
-createToggle("Hiển Thị FOV", 140, "ShowFOV", function(val) FOVCircle.Visible = val end)
-
-local ToggleMenuBtn = Instance.new("TextButton")
-ToggleMenuBtn.Size = UDim2.new(0, 120, 0, 35)
-ToggleMenuBtn.Position = UDim2.new(0.02, 0, 0.1, 0)
-ToggleMenuBtn.BackgroundColor3 = Color3.fromRGB(90, 50, 210)
-ToggleMenuBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleMenuBtn.Text = "⚡ Ẩn/Hiện Menu"
-ToggleMenuBtn.Font = Enum.Font.SourceSansBold
-ToggleMenuBtn.TextSize = 13
-ToggleMenuBtn.Active = true
-ToggleMenuBtn.Draggable = true
-ToggleMenuBtn.Parent = ScreenGui
-Instance.new("UICorner", ToggleMenuBtn).CornerRadius = UDim.new(0, 6)
-
-ToggleMenuBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = not MainFrame.Visible
+flyBtn.MouseButton1Click:Connect(function()
+    flyEnabled = not flyEnabled
+    if flyEnabled then
+        flyBtn.Text = "Fly Mode: ON"
+        flyBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+        startFlying()
+    else
+        flyBtn.Text = "Fly Mode: OFF"
+        flyBtn.BackgroundColor3 = Color3.fromRGB(45, 48, 60)
+        stopFlying()
+    end
 end)
 
--- ==========================================
--- 3. HỆ THỐNG QUÉT VÀ GHIM ĐẦU CHÍNH XÁC 100%
--- ==========================================
+-- === 6. LOGIC TỐI ƯU FIX LAG ===
+fixLagBtn.MouseButton1Click:Connect(function()
+    fixLagEnabled = not fixLagEnabled
+    if fixLagEnabled then
+        fixLagBtn.Text = "Fix Lag Ép Xung FPS: ON"
+        fixLagBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+        Lighting.GlobalShadows = false
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+        for _, v in ipairs(Workspace:GetDescendants()) do
+            if v:IsA("BasePart") then v.Material = Enum.Material.SmoothPlastic v.CastShadow = false
+            elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then v.Enabled = false end
+        end
+    else
+        fixLagBtn.Text = "Fix Lag Ép Xung FPS: OFF"
+        fixLagBtn.BackgroundColor3 = Color3.fromRGB(45, 48, 60)
+        Lighting.GlobalShadows = true
+    end
+end)
+
+-- === 7. LOGIC HỆ THỐNG AIMBOT LINH HOẠT ===
 local tracerLines = {}
-local lockedTargetPart = nil 
 
 local function getClosestHeadInFOV()
     local closestPart = nil
     local shortestDistance = Settings.FOV_Size
-    local centerScreen = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    local centerScreen = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
 
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-            local headPart = player.Character:FindFirstChild("Head")
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local humanoid = p.Character:FindFirstChildOfClass("Humanoid")
+            local headPart = p.Character:FindFirstChild("Head")
             
             if humanoid and humanoid.Health > 0 and headPart then
-                -- Lấy trực tiếp tọa độ màn hình của đầu nhân vật
-                local screenPos, onScreen = Camera:WorldToViewportPoint(headPart.Position)
+                local screenPos, onScreen = camera:WorldToViewportPoint(headPart.Position)
                 
-                -- Cho phép nhận diện ngay cả khi đang ở rìa màn hình
                 if onScreen then
                     local screenVector = Vector2.new(screenPos.X, screenPos.Y)
                     local distance = (screenVector - centerScreen).Magnitude
@@ -168,68 +451,48 @@ local function getClosestHeadInFOV()
     return closestPart
 end
 
-local function isCurrentTargetAlive(targetPart)
-    if not targetPart or not targetPart.Parent then return false end
-    local character = targetPart.Parent
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return false end
-    
-    local headPart = character:FindFirstChild("Head")
-    if not headPart then return false end
-    
-    local screenPos, onScreen = Camera:WorldToViewportPoint(headPart.Position)
-    if not onScreen then return false end
-    
-    local centerScreen = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-    local distance = (Vector2.new(screenPos.X, screenPos.Y) - centerScreen).Magnitude
-    
-    -- Mở rộng biên độ giữ khóa để mục tiêu không bị tuột khi di chuyển nhanh
-    if distance > (Settings.FOV_Size + 80) then return false end
-    
-    return true
-end
-
--- ==========================================
--- 4. VÒNG LẶP XỬ LÝ CHÍNH
--- ==========================================
-RunService.RenderStepped:Connect(function()
-    FOVCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
-
-    -- AIMBOT GHIM CHẶT ĐẦU CỐ ĐỊNH CHO ĐẾN KHI CHẾT
-    if Settings.Aimbot then
-        if not isCurrentTargetAlive(lockedTargetPart) then
-            lockedTargetPart = getClosestHeadInFOV()
+RunService.RenderStepped:Connect(function(deltaTime)
+    if speedEnabled then
+        local char = player.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if hum and root and hum.MoveDirection.Magnitude > 0 then
+                root.CFrame = root.CFrame + (hum.MoveDirection * (customSpeed * deltaTime))
+            end
         end
-        
-        if lockedTargetPart then
-            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, lockedTargetPart.Position)
-        end
-    else
-        lockedTargetPart = nil 
     end
 
-    -- ESP TRACER (Định vị toàn bộ người chơi)
+    FOVCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+
+    if Settings.Aimbot then
+        local targetHead = getClosestHeadInFOV()
+        if targetHead then
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetHead.Position)
+        end
+    end
+
     if Settings.ESP_Tracers then
-        for _, player in pairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Head") then
-                local head = player.Character.Head
-                local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= player and p.Character and p.Character:FindFirstChild("Head") then
+                local head = p.Character.Head
+                local humanoid = p.Character:FindFirstChildOfClass("Humanoid")
                 
                 if humanoid and humanoid.Health > 0 then
-                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
                     
                     if onScreen then
-                        local line = tracerLines[player.Name]
+                        local line = tracerLines[p.Name]
                         if not line then
                             line = Instance.new("Frame")
                             line.AnchorPoint = Vector2.new(0.5, 0.5)
                             line.BackgroundColor3 = Color3.fromRGB(255, 50, 50) 
                             line.BorderSizePixel = 0
                             line.Parent = TracersFolder
-                            tracerLines[player.Name] = line
+                            tracerLines[p.Name] = line
                         end
                         
-                        local centerScreen = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+                        local centerScreen = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
                         local targetScreen = Vector2.new(screenPos.X, screenPos.Y)
                         
                         local distance = (targetScreen - centerScreen).Magnitude
@@ -239,15 +502,15 @@ RunService.RenderStepped:Connect(function()
                         line.Position = UDim2.new(0, (centerScreen.X + targetScreen.X) / 2, 0, (centerScreen.Y + targetScreen.Y) / 2)
                         line.Rotation = math.deg(angle)
                         line.Visible = true
-                    elseif tracerLines[player.Name] then
-                        tracerLines[player.Name].Visible = false
+                    elseif tracerLines[p.Name] then
+                        tracerLines[p.Name].Visible = false
                     end
-                elseif tracerLines[player.Name] then
-                    tracerLines[player.Name].Visible = false
+                elseif tracerLines[p.Name] then
+                    tracerLines[p.Name].Visible = false
                 end
             else
-                if tracerLines[player.Name] then
-                    tracerLines[player.Name].Visible = false
+                if tracerLines[p.Name] then
+                    tracerLines[p.Name].Visible = false
                 end
             end
         end
@@ -258,9 +521,9 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-Players.PlayerRemoving:Connect(function(player)
-    if tracerLines[player.Name] then
-        tracerLines[player.Name]:Destroy()
-        tracerLines[player.Name] = nil
+Players.PlayerRemoving:Connect(function(p)
+    if tracerLines[p.Name] then
+        tracerLines[p.Name]:Destroy()
+        tracerLines[p.Name] = nil
     end
 end)
